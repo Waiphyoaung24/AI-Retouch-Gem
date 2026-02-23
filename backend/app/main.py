@@ -8,7 +8,7 @@ import os
 app = FastAPI(title="retouch-gem API")
 
 # CORS
-cors_origins = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:8000").split(",")
+cors_origins = os.getenv("CORS_ORIGINS", "http://localhost:3001,http://localhost:8001").split(",")
 
 app.add_middleware(
     CORSMiddleware,
