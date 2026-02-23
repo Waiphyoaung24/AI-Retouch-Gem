@@ -13,7 +13,7 @@ cors_origins = os.getenv("CORS_ORIGINS", "http://localhost:3001,http://localhost
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
-    allow_origin_regex=r"https://.*\.(ngrok-free\.app|dokploy\.com)",
+    allow_origin_regex=r"https://.*\.(ngrok-free\.app|dokploy\.com|nexapex\.ai)",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
