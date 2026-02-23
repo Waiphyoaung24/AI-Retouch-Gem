@@ -10,7 +10,7 @@ services:
       - GOOGLE_API_KEY=${GOOGLE_API_KEY}
       - SUPABASE_URL=${SUPABASE_URL:-}
       - SUPABASE_KEY=${SUPABASE_KEY:-}
-      - CORS_ORIGINS=${CORS_ORIGINS:-}
+      - CORS_ORIGINS=${CORS_ORIGINS:-https://tryon.nexapex.ai,https://tryon-api.nexapex.ai}
     volumes:
       - backend_uploads:/app/uploads
       - backend_data:/app/data
