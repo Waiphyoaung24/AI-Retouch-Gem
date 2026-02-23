@@ -8,16 +8,12 @@ import os
 app = FastAPI(title="retouch-gem API")
 
 # CORS
-origins = [
-    "http://localhost:3000",
-    "http://localhost:8000",
-    "https://298c-2405-9800-b660-9f9d-b51e-7987-52b8-51e9.ngrok-free.app",
-]
+cors_origins = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:8000").split(",")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
-    allow_origin_regex="https://.*\.ngrok-free\.app",
+    allow_origins=cors_origins,
+    allow_origin_regex=r"https://.*\.(ngrok-free\.app|dokploy\.com)",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
