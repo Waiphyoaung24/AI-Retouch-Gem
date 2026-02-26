@@ -5,85 +5,103 @@ export const API_URL = BASE_URL.endsWith('/api') ? BASE_URL : `${BASE_URL.replac
 
 const api = axios.create({
   baseURL: API_URL,
-  headers: {
-     'ngrok-skip-browser-warning': 'true'
-    }
+  headers: { 'ngrok-skip-browser-warning': 'true' },
 });
 
-export interface Product {
+// --- Types ---
+export interface Gem {
   id: string;
   name: string;
+  product_image_url: string;
+  context_image_url: string;
+  description?: string;
+  carat_weight?: number | null;
+  length_mm?: number | null;
+  width_mm?: number | null;
+  depth_mm?: number | null;
+  created_at: string;
+}
+
+export interface SettingCategory {
+  id: string;
+  name: string;
+  body_part: string;
+  sort_order: number;
+}
+
+export interface Metal {
+  id: string;
+  name: string;
+  sort_order: number;
+}
+
+export interface SettingStyle {
+  id: string;
+  category_id: string;
+  name: string;
+  sort_order: number;
+}
+
+export interface SettingOptions {
+  categories: SettingCategory[];
+  metals: Metal[];
+  styles: SettingStyle[];
+}
+
+export interface ModelPhoto {
+  id: string;
+  name: string;
+  body_part: string;
   image_url: string;
   created_at: string;
 }
 
-export interface HandModel {
-  id: string;
-  name: string;
-  image_url: string;
+export interface PhotoValidationResult {
+  is_valid: boolean;
+  body_part_detected: string | null;
+  feedback: string;
 }
 
-export interface TryOnResult {
+export interface GeneratePreviewResult {
   result_url: string;
-  cached: boolean;
   processing_time_ms: number;
 }
 
-export const getProducts = async () => {
-  const response = await api.get<Product[]>('/products/');
-  return response.data;
-};
+// --- Gems ---
+export const getGems = () => api.get<Gem[]>('/gems/').then(r => r.data);
+export const getGem = (id: string) => api.get<Gem>(`/gems/${id}`).then(r => r.data);
+export const createGem = (formData: FormData, adminKey: string) =>
+  api.post<Gem>('/gems/', formData, {
+    headers: { 'Content-Type': 'multipart/form-data', 'x-admin-key': adminKey },
+  }).then(r => r.data);
+export const deleteGem = (id: string, adminKey: string) =>
+  api.delete(`/gems/${id}`, { headers: { 'x-admin-key': adminKey } }).then(r => r.data);
 
-export const getHandModels = async () => {
-  const response = await api.get<HandModel[]>('/hand-models/');
-  return response.data;
-};
+// --- Settings ---
+export const getSettingOptions = () => api.get<SettingOptions>('/settings/options').then(r => r.data);
+export const getStylesForCategory = (categoryId: string) =>
+  api.get<SettingStyle[]>(`/settings/styles/${categoryId}`).then(r => r.data);
 
-export const uploadProduct = async (formData: FormData, adminKey: string) => {
-  const response = await api.post<Product>('/products/', formData, {
-    headers: {
-      'Content-Type': 'multipart/form-data',
-      'x-admin-key': adminKey,
-    },
-  });
-  return response.data;
+// --- Model Photos ---
+export const getModelPhotos = (bodyPart?: string) => {
+  const params = bodyPart ? { body_part: bodyPart } : {};
+  return api.get<ModelPhoto[]>('/model-photos/', { params }).then(r => r.data);
 };
+export const createModelPhoto = (formData: FormData, adminKey: string) =>
+  api.post<ModelPhoto>('/model-photos/', formData, {
+    headers: { 'Content-Type': 'multipart/form-data', 'x-admin-key': adminKey },
+  }).then(r => r.data);
+export const deleteModelPhoto = (id: string, adminKey: string) =>
+  api.delete(`/model-photos/${id}`, { headers: { 'x-admin-key': adminKey } }).then(r => r.data);
 
-export const uploadHandModel = async (formData: FormData, adminKey: string) => {
-  const response = await api.post<HandModel>('/hand-models/', formData, {
-    headers: {
-      'Content-Type': 'multipart/form-data',
-      'x-admin-key': adminKey,
-    },
-  });
-  return response.data;
-};
-
-export const deleteHandModel = async (id: string, adminKey: string) => {
-  const response = await api.delete(`/hand-models/${id}`, {
-    headers: {
-      'x-admin-key': adminKey,
-    },
-  });
-  return response.data;
-};
-
-export const deleteProduct = async (id: string, adminKey: string) => {
-  const response = await api.delete(`/products/${id}`, {
-    headers: {
-      'x-admin-key': adminKey,
-    },
-  });
-  return response.data;
-};
-
-export const tryOn = async (formData: FormData) => {
-  const response = await api.post<TryOnResult>('/try-on/', formData, {
-    headers: {
-      'Content-Type': 'multipart/form-data',
-    },
-  });
-  return response.data;
-};
+// --- Validation & Generation ---
+export const validatePhoto = (formData: FormData) =>
+  api.post<PhotoValidationResult>('/try-on/validate-photo', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  }).then(r => r.data);
+export const generatePreview = (formData: FormData) =>
+  api.post<GeneratePreviewResult>('/try-on/generate', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  }).then(r => r.data);
 
 export default api;

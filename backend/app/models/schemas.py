@@ -1,44 +1,95 @@
 from pydantic import BaseModel
-from typing import Optional
-from datetime import datetime
-import uuid
+from typing import Optional, List
 
-class ProductBase(BaseModel):
+
+# --- Gems ---
+class GemCreate(BaseModel):
     name: str
+    description: Optional[str] = None
+    carat_weight: Optional[float] = None
+    length_mm: Optional[float] = None
+    width_mm: Optional[float] = None
+    depth_mm: Optional[float] = None
 
-class Product(ProductBase):
+class Gem(BaseModel):
     id: str
-    image_path: str
+    name: str
+    product_image_url: str
+    context_image_url: str
+    description: Optional[str] = None
+    carat_weight: Optional[float] = None
+    length_mm: Optional[float] = None
+    width_mm: Optional[float] = None
+    depth_mm: Optional[float] = None
+    created_at: str
+
+
+# --- Setting Options ---
+class SettingCategory(BaseModel):
+    id: str
+    name: str
+    body_part: str
+    sort_order: int
+
+class Metal(BaseModel):
+    id: str
+    name: str
+    sort_order: int
+
+class SettingStyle(BaseModel):
+    id: str
+    category_id: str
+    name: str
+    sort_order: int
+
+
+# --- Prompt Templates ---
+class PromptTemplate(BaseModel):
+    id: str
+    category_id: str
+    metal_id: str
+    style_id: str
+    prompt_body: str
+    created_at: str
+
+class PromptTemplateCreate(BaseModel):
+    category_id: str
+    metal_id: str
+    style_id: str
+    prompt_body: str
+
+
+# --- Model Photos ---
+class ModelPhoto(BaseModel):
+    id: str
+    name: str
+    body_part: str
     image_url: str
     created_at: str
 
-class HandModelBase(BaseModel):
-    name: str
 
-class HandModel(HandModelBase):
-    id: str
-    image_path: str
-    image_url: str
+# --- Photo Validation ---
+class PhotoValidationResult(BaseModel):
+    is_valid: bool
+    body_part_detected: Optional[str] = None
+    feedback: str
 
-class PromptBase(BaseModel):
-    name: str
-    body: str
 
-class Prompt(PromptBase):
-    id: str
-    is_default: bool
-    created_at: str
+# --- Generation ---
+class GeneratePreviewRequest(BaseModel):
+    gem_id: str
+    category_id: str
+    metal_id: str
+    style_id: str
+    model_photo_id: Optional[str] = None
 
-class TryOnRequest(BaseModel):
-    product_id: Optional[str] = None
-    hand_model_id: str
-
-class TryOnResult(BaseModel):
+class GeneratePreviewResult(BaseModel):
     result_url: str
-    cached: bool
     processing_time_ms: float
 
-class CacheEntry(BaseModel):
-    id: str # cache_key
-    result_url: str
-    created_at: str
+
+# --- Settings Options Response ---
+class SettingOptionsResponse(BaseModel):
+    categories: List[SettingCategory]
+    metals: List[Metal]
+    styles: List[SettingStyle]

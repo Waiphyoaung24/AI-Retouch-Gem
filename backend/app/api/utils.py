@@ -83,3 +83,19 @@ async def upload_bytes_to_supabase(content: bytes, bucket: str, content_type: st
     except Exception as e:
         print(f"Supabase Bytes Upload Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+async def upload_customer_photo_to_supabase(content: bytes, content_type: str = "image/jpeg") -> str:
+    if not supabase:
+        raise HTTPException(status_code=500, detail="Supabase not configured")
+    try:
+        file_name = f"{uuid.uuid4()}.jpg"
+        supabase.storage.from_("customer-uploads").upload(
+            path=file_name,
+            file=content,
+            file_options={"content-type": content_type}
+        )
+        url = supabase.storage.from_("customer-uploads").get_public_url(file_name)
+        return url
+    except Exception as e:
+        print(f"Customer Photo Upload Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

@@ -1,15 +1,14 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from .api import products, hand_models, prompts, try_on
-from .config import settings
+from .api import gems, model_photos, settings, try_on
 import os
 
 app = FastAPI(title="retouch-gem API")
 
-# CORS
 cors_env = os.getenv("CORS_ORIGINS", "")
 cors_origins = [o.strip() for o in cors_env.split(",") if o.strip()] or [
+    "http://localhost:3000",
     "http://localhost:3001",
     "http://localhost:8001",
     "https://tryon.nexapex.ai",
@@ -25,13 +24,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Mount static files
+os.makedirs("uploads", exist_ok=True)
 app.mount("/api/uploads", StaticFiles(directory="uploads"), name="uploads")
 
-# Include routers
-app.include_router(products.router, prefix="/api/products", tags=["products"])
-app.include_router(hand_models.router, prefix="/api/hand-models", tags=["hand-models"])
-app.include_router(prompts.router, prefix="/api/prompts", tags=["prompts"])
+app.include_router(gems.router, prefix="/api/gems", tags=["gems"])
+app.include_router(model_photos.router, prefix="/api/model-photos", tags=["model-photos"])
+app.include_router(settings.router, prefix="/api/settings", tags=["settings"])
 app.include_router(try_on.router, prefix="/api/try-on", tags=["try-on"])
 
 @app.get("/")
