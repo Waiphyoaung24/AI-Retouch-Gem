@@ -7,16 +7,19 @@ import {
   getGem, getSettingOptions, getModelPhotos, generatePreview, validatePhoto,
   type Gem, type SettingCategory, type Metal, type SettingStyle, type ModelPhoto,
 } from '@/lib/api';
-import { Diamond, ChevronLeft, ChevronRight, Upload, Download, X, Loader2, Sparkles, Check } from 'lucide-react';
+import { Diamond, ChevronLeft, ChevronRight, Upload, Download, X, Loader2, Sparkles, Check, Lock } from 'lucide-react';
 
-type Step = 'category' | 'metal' | 'style' | 'photo' | 'result';
+type Step = 'category' | 'metal' | 'style' | 'photo' | 'finger' | 'result';
 
 const STEPS: { key: Step; label: string }[] = [
   { key: 'category', label: 'Category' },
   { key: 'metal', label: 'Metal' },
   { key: 'style', label: 'Style' },
   { key: 'photo', label: 'Photo' },
+  { key: 'finger', label: 'Finger' },
 ];
+
+const FINGER_OPTIONS = ['index', 'middle', 'ring', 'pinky'] as const;
 
 export default function GemPreviewPage() {
   const params = useParams();
@@ -34,13 +37,14 @@ export default function GemPreviewPage() {
   const [selectedModelPhoto, setSelectedModelPhoto] = useState<ModelPhoto | null>(null);
   const [customerPhoto, setCustomerPhoto] = useState<File | null>(null);
   const [customerPhotoPreview, setCustomerPhotoPreview] = useState<string | null>(null);
+  const [selectedFinger, setSelectedFinger] = useState<string>('ring');
 
   const [step, setStep] = useState<Step>('category');
   const [generating, setGenerating] = useState(false);
-  const [resultUrl, setResultUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [validating, setValidating] = useState(false);
   const [progress, setProgress] = useState(0);
+  const [resultUrl, setResultUrl] = useState<string | null>(null);
 
   useEffect(() => {
     if (!gemId) return;
@@ -54,6 +58,10 @@ export default function GemPreviewPage() {
 
   const filteredStyles = allStyles.filter(s => s.category_id === selectedCategory?.id);
   const bodyPart = selectedCategory?.body_part || 'hand';
+  const isRing = selectedCategory?.name === 'Ring';
+
+  // Visible steps: hide Finger step for non-Ring categories
+  const visibleSteps = STEPS.filter(s => s.key !== 'finger' || isRing);
 
   useEffect(() => {
     if (selectedCategory) {
@@ -61,7 +69,7 @@ export default function GemPreviewPage() {
     }
   }, [selectedCategory]);
 
-  const stepIndex = STEPS.findIndex(s => s.key === step);
+  const stepIndex = visibleSteps.findIndex(s => s.key === step);
 
   const handleCustomerPhotoUpload = useCallback(async (file: File) => {
     if (!selectedCategory) return;
@@ -75,7 +83,7 @@ export default function GemPreviewPage() {
       fd.append('body_part', bodyPart);
       await validatePhoto(fd);
     } catch {
-      // Validation endpoint optional — continue anyway
+      // Validation endpoint optional
     } finally {
       setValidating(false);
     }
@@ -83,34 +91,47 @@ export default function GemPreviewPage() {
 
   const canGenerate = selectedCategory && selectedMetal && selectedStyle && (selectedModelPhoto || customerPhoto);
 
+  const buildFormData = useCallback(() => {
+    if (!gem || !selectedCategory || !selectedMetal || !selectedStyle) return null;
+    const fd = new FormData();
+    fd.append('gem_id', gem.id);
+    fd.append('category_id', selectedCategory.id);
+    fd.append('metal_id', selectedMetal.id);
+    fd.append('style_id', selectedStyle.id);
+    if (selectedModelPhoto) {
+      fd.append('model_photo_id', selectedModelPhoto.id);
+    } else if (customerPhoto) {
+      fd.append('customer_photo', customerPhoto);
+    }
+    if (isRing) {
+      fd.append('finger', selectedFinger);
+    }
+    return fd;
+  }, [gem, selectedCategory, selectedMetal, selectedStyle, selectedModelPhoto, customerPhoto, isRing, selectedFinger]);
+
   const handleGenerate = async () => {
     if (!canGenerate || !gem) return;
     setGenerating(true);
     setError(null);
     setProgress(0);
+    setResultUrl(null);
 
     const interval = setInterval(() => {
-      setProgress(prev => Math.min(prev + Math.random() * 8, 92));
-    }, 500);
+      setProgress(prev => Math.min(prev + Math.random() * 5, 92));
+    }, 800);
 
     try {
-      const fd = new FormData();
-      fd.append('gem_id', gem.id);
-      fd.append('category_id', selectedCategory!.id);
-      fd.append('metal_id', selectedMetal!.id);
-      fd.append('style_id', selectedStyle!.id);
-      if (selectedModelPhoto) {
-        fd.append('model_photo_id', selectedModelPhoto.id);
-      } else if (customerPhoto) {
-        fd.append('customer_photo', customerPhoto);
-      }
+      const fd = buildFormData();
+      if (!fd) throw new Error('Missing form data');
+
       const result = await generatePreview(fd);
       setProgress(100);
+
       setTimeout(() => {
         setResultUrl(result.result_url);
         setStep('result');
         setGenerating(false);
-      }, 400);
+      }, 300);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : 'Generation failed';
       setError(msg);
@@ -129,6 +150,7 @@ export default function GemPreviewPage() {
     setSelectedModelPhoto(null);
     setCustomerPhoto(null);
     setCustomerPhotoPreview(null);
+    setSelectedFinger('ring');
     setProgress(0);
   };
 
@@ -187,7 +209,7 @@ export default function GemPreviewPage() {
         {/* Step Indicator */}
         {step !== 'result' && (
           <div className="flex items-center gap-2 mb-8 overflow-x-auto pb-2">
-            {STEPS.map((s, i) => {
+            {visibleSteps.map((s, i) => {
               const isCurrent = s.key === step;
               const isCompleted = i < stepIndex;
               return (
@@ -226,19 +248,34 @@ export default function GemPreviewPage() {
             <h2 className="font-[family-name:var(--font-display)] text-2xl font-semibold text-stone-100 mb-1">Choose a Category</h2>
             <p className="text-stone-500 text-sm mb-6">What type of jewelry setting?</p>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              {categories.map(cat => (
-                <button
-                  key={cat.id}
-                  onClick={() => { setSelectedCategory(cat); setSelectedStyle(null); setSelectedModelPhoto(null); setCustomerPhoto(null); setCustomerPhotoPreview(null); }}
-                  className={`option-card p-6 rounded-2xl border text-left ${
-                    selectedCategory?.id === cat.id ? 'selected border-gold' : 'border-stone-800 bg-stone-900/50'
-                  }`}
-                >
-                  <div className="text-2xl mb-3">{cat.name === 'Ring' ? '💍' : cat.name === 'Earring' ? '✨' : '📿'}</div>
-                  <h3 className="font-semibold text-stone-100 text-lg">{cat.name}</h3>
-                  <p className="text-stone-500 text-xs mt-1">Fits on {cat.body_part}</p>
-                </button>
-              ))}
+              {categories.map(cat => {
+                const isLocked = cat.name !== 'Ring';
+                return (
+                  <button
+                    key={cat.id}
+                    onClick={() => {
+                      if (isLocked) return;
+                      setSelectedCategory(cat); setSelectedStyle(null); setSelectedModelPhoto(null); setCustomerPhoto(null); setCustomerPhotoPreview(null);
+                    }}
+                    disabled={isLocked}
+                    className={`relative option-card p-6 rounded-2xl border text-left ${
+                      isLocked
+                        ? 'border-stone-800/50 bg-stone-900/30 opacity-50 cursor-not-allowed hover:transform-none hover:shadow-none hover:border-stone-800/50'
+                        : selectedCategory?.id === cat.id ? 'selected border-gold' : 'border-stone-800 bg-stone-900/50'
+                    }`}
+                  >
+                    {isLocked && (
+                      <div className="absolute inset-0 rounded-2xl flex flex-col items-center justify-center bg-stone-950/60 z-10">
+                        <Lock className="w-5 h-5 text-stone-500 mb-1" />
+                        <span className="text-stone-500 text-xs font-medium">Coming Soon</span>
+                      </div>
+                    )}
+                    <Diamond className={`w-6 h-6 mb-3 ${isLocked ? 'text-stone-600' : selectedCategory?.id === cat.id ? 'text-gold' : 'text-stone-400'}`} />
+                    <h3 className="font-semibold text-stone-100 text-lg">{cat.name}</h3>
+                    <p className="text-stone-500 text-xs mt-1">Fits on {cat.body_part}</p>
+                  </button>
+                );
+              })}
             </div>
             <div className="mt-8 flex justify-end">
               <button
@@ -331,7 +368,6 @@ export default function GemPreviewPage() {
             <h2 className="font-[family-name:var(--font-display)] text-2xl font-semibold text-stone-100 mb-1">Choose a Photo</h2>
             <p className="text-stone-500 text-sm mb-6">Select a model photo or upload your own {bodyPart} photo</p>
 
-            {/* Model photos grid */}
             {modelPhotos.length > 0 && (
               <div className="mb-6">
                 <h3 className="text-stone-400 text-xs uppercase tracking-wider font-semibold mb-3">Preset Models</h3>
@@ -351,7 +387,6 @@ export default function GemPreviewPage() {
               </div>
             )}
 
-            {/* Upload own photo */}
             <div className="mb-6">
               <h3 className="text-stone-400 text-xs uppercase tracking-wider font-semibold mb-3">Or Upload Your Own</h3>
               {customerPhotoPreview ? (
@@ -387,6 +422,55 @@ export default function GemPreviewPage() {
               <button onClick={() => setStep('style')} className="flex items-center gap-2 px-5 py-3 rounded-xl border border-stone-700 text-stone-300 hover:border-stone-500 transition-colors cursor-pointer">
                 <ChevronLeft className="w-4 h-4" /> Back
               </button>
+              {isRing ? (
+                <button
+                  onClick={() => (selectedModelPhoto || customerPhoto) && setStep('finger')}
+                  disabled={!selectedModelPhoto && !customerPhoto}
+                  className="flex items-center gap-2 px-6 py-3 rounded-xl bg-gold text-stone-950 font-semibold disabled:opacity-30 disabled:cursor-not-allowed hover:bg-gold-light transition-colors cursor-pointer"
+                >
+                  Next <ChevronRight className="w-4 h-4" />
+                </button>
+              ) : (
+                <button
+                  onClick={handleGenerate}
+                  disabled={!canGenerate || generating}
+                  className="flex items-center gap-2 px-8 py-3 rounded-xl bg-gold text-stone-950 font-bold disabled:opacity-30 disabled:cursor-not-allowed hover:bg-gold-light transition-colors cursor-pointer"
+                >
+                  {generating ? (
+                    <><Loader2 className="w-4 h-4 animate-spin" /> Generating...</>
+                  ) : (
+                    <><Sparkles className="w-4 h-4" /> Generate Preview</>
+                  )}
+                </button>
+              )}
+            </div>
+          </section>
+        )}
+
+        {/* Step: Finger (Ring only) */}
+        {step === 'finger' && isRing && (
+          <section>
+            <h2 className="font-[family-name:var(--font-display)] text-2xl font-semibold text-stone-100 mb-1">Choose a Finger</h2>
+            <p className="text-stone-500 text-sm mb-6">Which finger should the ring be placed on?</p>
+            <div className="flex items-center gap-3">
+              {FINGER_OPTIONS.map(f => (
+                <button
+                  key={f}
+                  onClick={() => setSelectedFinger(f)}
+                  className={`px-6 py-3 rounded-full text-sm font-medium transition-all cursor-pointer ${
+                    selectedFinger === f
+                      ? 'bg-gold text-stone-950'
+                      : 'option-card bg-stone-900/50 border border-stone-800 text-stone-300 hover:border-gold/50'
+                  }`}
+                >
+                  {f.charAt(0).toUpperCase() + f.slice(1)}
+                </button>
+              ))}
+            </div>
+            <div className="mt-8 flex justify-between">
+              <button onClick={() => setStep('photo')} className="flex items-center gap-2 px-5 py-3 rounded-xl border border-stone-700 text-stone-300 hover:border-stone-500 transition-colors cursor-pointer">
+                <ChevronLeft className="w-4 h-4" /> Back
+              </button>
               <button
                 onClick={handleGenerate}
                 disabled={!canGenerate || generating}
@@ -408,7 +492,7 @@ export default function GemPreviewPage() {
             <Diamond className="w-12 h-12 text-gold gem-pulse mb-6" />
             <p className="text-stone-200 font-[family-name:var(--font-display)] text-2xl mb-2">Creating Your Preview</p>
             <p className="text-stone-500 text-sm mb-6">
-              {selectedStyle?.name} {selectedCategory?.name?.toLowerCase()} in {selectedMetal?.name?.toLowerCase()}
+              Placing {selectedStyle?.name} {selectedCategory?.name?.toLowerCase()} in {selectedMetal?.name?.toLowerCase()}
             </p>
             <div className="w-64 h-1.5 bg-stone-800 rounded-full overflow-hidden">
               <div
@@ -423,17 +507,21 @@ export default function GemPreviewPage() {
         {/* Result */}
         {step === 'result' && resultUrl && (
           <section className="text-center">
-            <h2 className="font-[family-name:var(--font-display)] text-3xl font-bold text-stone-50 mb-2">Your Preview</h2>
-            <p className="text-stone-500 text-sm mb-8">
+            <h2 className="font-[family-name:var(--font-display)] text-3xl font-bold text-stone-50 mb-2">
+              Your Preview
+            </h2>
+            <p className="text-stone-500 text-sm mb-6">
               {gem.name} &middot; {selectedStyle?.name} {selectedCategory?.name} &middot; {selectedMetal?.name}
             </p>
-            <div className="relative inline-block max-w-lg mx-auto">
+
+            <div className="relative inline-block max-w-lg mx-auto w-full">
               <img
                 src={resultUrl}
-                alt="Generated preview"
-                className="rounded-2xl border border-stone-800 shadow-2xl w-full"
+                alt="Jewelry preview"
+                className="rounded-2xl border border-stone-800 shadow-2xl w-full result-crossfade"
               />
             </div>
+
             <div className="flex items-center justify-center gap-4 mt-8">
               <a
                 href={resultUrl}

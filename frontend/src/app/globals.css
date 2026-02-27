@@ -99,9 +99,24 @@ body {
   background: #57534E;
 }
 
+/* Gemini crossfade animation */
+@keyframes crossfade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.result-crossfade {
+  animation: crossfade-in 0.7s ease-in-out forwards;
+}
+
+/* Touch optimization for mobile */
+.touch-action-manipulation {
+  touch-action: manipulation;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .text-shimmer { animation: none; }
   .gem-pulse { animation: none; opacity: 1; }
   .option-card { transition: none; }
   .option-card:hover { transform: none; }
+  .result-crossfade { animation: none; opacity: 1; }
 }
