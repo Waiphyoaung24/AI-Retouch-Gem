@@ -2,7 +2,6 @@ from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from typing import Optional
 from ..models.schemas import GeneratePreviewResult, PhotoValidationResult
 from ..services.gemini_service import (
-    analyze_gem,
     generate_gem_preview,
     validate_customer_photo,
 )
@@ -52,61 +51,79 @@ async def fetch_image_bytes(url: str) -> bytes:
         return response.content
 
 
-def _format_gem_description(gem_analysis: dict) -> str:
-    """Format the Pass 1 analysis into a rich text block for the Pass 2 prompt."""
-    parts = []
+def _build_size_anchor(
+    category_name: str,
+    carat: float,
+    length_mm,
+    width_mm,
+    dim_text: str,
+    gem_to_finger_ratio: float | None = None,
+) -> str:
+    """Generate a concrete size description using gem-to-finger ratio.
 
-    overall = gem_analysis.get("overall_description")
-    if overall:
-        parts.append(f"Overall: {overall}")
+    If ``gem_to_finger_ratio`` is available (measured by Gemini Vision at upload
+    time), we use it directly.  Otherwise we fall back to computing from mm
+    dimensions with a 16mm average finger width.
+    """
+    AVG_FINGER_WIDTH_MM = 16.0
 
-    color = gem_analysis.get("color_primary", "")
-    secondary = gem_analysis.get("color_secondary", "")
-    if color:
-        color_str = color
-        if secondary and secondary.lower() not in ("none", "n/a", ""):
-            color_str += f" with {secondary}"
-        parts.append(f"Color: {color_str}")
+    # --- Determine percentage ---
+    if gem_to_finger_ratio is not None:
+        pct = round(gem_to_finger_ratio)
+        ratio_desc = (
+            f"The gem should appear approximately {pct}% of the finger's width "
+            f"(measured from the context photo) — "
+        )
+    else:
+        gem_w = float(width_mm) if width_mm else float(length_mm) if length_mm else None
+        if gem_w:
+            pct = round((gem_w / AVG_FINGER_WIDTH_MM) * 100)
+            ratio_desc = (
+                f"The gem is {gem_w}mm wide. An average finger is about {AVG_FINGER_WIDTH_MM:.0f}mm wide. "
+                f"So the gem should appear approximately {pct}% of the finger's width — "
+            )
+        else:
+            pct = None
+            ratio_desc = f"The gem is {dim_text}. "
 
-    sat = gem_analysis.get("saturation")
-    tone = gem_analysis.get("tone")
-    if sat and tone:
-        parts.append(f"Saturation/tone: {sat} saturation, {tone} tone")
+    if pct is not None:
+        if pct <= 35:
+            ratio_desc += "it is a SMALL stone, noticeably smaller than the finger width. Do NOT enlarge it."
+        elif pct <= 60:
+            ratio_desc += "it is a medium stone, roughly half the finger width."
+        else:
+            ratio_desc += "it is a large stone, approaching the finger width."
 
-    cut = gem_analysis.get("cut_shape")
-    if cut:
-        parts.append(f"Cut shape: {cut}")
-
-    facets = gem_analysis.get("facet_pattern")
-    if facets:
-        parts.append(f"Facet pattern: {facets}")
-
-    brilliance = gem_analysis.get("brilliance")
-    if brilliance:
-        parts.append(f"Brilliance: {brilliance}")
-
-    transparency = gem_analysis.get("transparency")
-    if transparency:
-        parts.append(f"Transparency: {transparency}")
-
-    unique = gem_analysis.get("unique_features")
-    if unique and unique.lower() not in ("none", "n/a", ""):
-        parts.append(f"Unique features: {unique}")
-
-    return "\n".join(parts)
-
-
-def _build_size_anchor(category_name: str, carat: float, length_mm, width_mm, dim_text: str) -> str:
-    """Generate a size description that defers to the visual context image (Image 2) as ground truth."""
-
-    body_ref = "finger" if category_name == "Ring" else "earlobe" if category_name == "Earring" else "neck"
-
-    return (
-        f"The gemstone is {dim_text}. "
-        f"Image 2 shows this EXACT gem on a real human {body_ref} — use that photo as your size reference. "
-        f"The gem in your output on the {body_ref} in Image 3 must be the SAME size relative to the {body_ref} "
-        f"as it appears in Image 2. Do not enlarge or shrink it."
+    # Always reference the third image (context photo) for visual confirmation
+    visual_ref = (
+        f"Look at the third image — it shows this exact gem on a real hand. "
+        f"The gem in your output MUST appear at the same proportion relative to the finger "
+        f"as it does in the third image. Do not make it bigger."
     )
+
+    if category_name == "Ring":
+        return f"{ratio_desc} {visual_ref}"
+    elif category_name == "Earring":
+        return (
+            f"{ratio_desc} "
+            f"An earlobe is roughly the same width as a finger, so render the gem at this same "
+            f"proportion relative to the earlobe. {visual_ref}"
+        )
+    else:  # Pendant
+        return (
+            f"{ratio_desc} "
+            f"A human chest is much wider than a hand, so the gem will look proportionally SMALLER "
+            f"as a pendant. A {dim_text} gem is a small, delicate pendant. {visual_ref}"
+        )
+
+
+def _wear_instruction(category_name: str) -> str:
+    if category_name == "Ring":
+        return "the band wraps around the finger with the gem sitting on top, like a real person wearing a ring"
+    elif category_name == "Earring":
+        return "the earring hangs naturally from or sits on the earlobe, like real jewelry being worn"
+    else:
+        return "the pendant hangs from a delicate chain around the neck, resting naturally on the chest"
 
 
 def build_prompt(
@@ -114,16 +131,19 @@ def build_prompt(
     metal_name: str,
     style_name: str,
     gem_data: dict = None,
-    gem_description: str = "",
+    finger: Optional[str] = None,
 ) -> str:
-    """Build the Pass 2 generation prompt using Gemini's multi-image composition pattern.
+    """Build prompt following Gemini's Detail Preservation pattern.
 
-    Follows the 'Advanced Composition' and 'High-fidelity detail preservation'
-    templates from the Gemini docs — narrative description, not a list of rules.
+    Image order (set in gemini_service.py):
+    - First image:  target photo (base to edit)
+    - Second image: gem product photo (element to transfer)
+    - Third image:  gem on hand (size reference)
     """
     gem_data = gem_data or {}
     body_part = "hand" if category_name == "Ring" else "ear" if category_name == "Earring" else "neck"
-    placement = "ring finger" if category_name == "Ring" else "earlobe" if category_name == "Earring" else "neck/chest"
+    finger_name = finger if finger else "ring"
+    placement = f"{finger_name} finger" if category_name == "Ring" else "earlobe" if category_name == "Earring" else "neck/chest"
 
     # Dimension context as natural language
     carat = gem_data.get("carat_weight")
@@ -139,31 +159,23 @@ def build_prompt(
     metal_desc = METAL_DETAILS.get(metal_name, f"{metal_name.lower()} metal with realistic reflections")
     style_desc = STYLE_DETAILS.get(style_name, f"a {style_name.lower()} setting")
 
-    # Size anchors scaled by carat weight — an average adult finger is ~16mm wide
+    # Size anchors — prefer measured ratio from DB, fall back to mm computation
     carat_f = float(carat) if carat else 1.0
-    size_anchor = _build_size_anchor(category_name, carat_f, length, width, dim_text)
+    size_anchor = _build_size_anchor(
+        category_name, carat_f, length, width, dim_text,
+        gem_to_finger_ratio=gem_data.get("gem_to_finger_ratio"),
+    )
 
-    return f"""Create a photorealistic jewelry product photograph.
+    return f"""Take the first image of a person's {body_part}. Place the exact gemstone from the second image onto the {placement} in a {style_name} {category_name.lower()} setting made of {metal_desc}. Ensure that the person's {body_part}, skin texture, skin tone, pose, and background in the first image remain completely unchanged.
 
-You are given three reference images:
-- Image 1: A loose gemstone product photo — use it as the visual reference for the gem's exact color, cut, facets, and brilliance.
-- Image 2: The SAME gemstone photographed on a real human {body_part} — use this as your SIZE reference. The gem-to-{body_part} proportion in this photo is the ground truth.
-- Image 3: A person's {body_part} — this is the base photograph. Keep this image exactly as-is except for adding the jewelry.
+The gemstone from the second image must be transferred exactly as it appears — same color, same shape, same cut, same facet pattern, same brilliance. Do not reimagine or recreate the gem. It must be visually identical to the second image.
 
-GEMSTONE VISUAL IDENTITY (preserve these exact visual qualities from Image 1):
-{gem_description}
-
-COMPOSITION TASK:
-Place the gemstone from Image 1 into a {style_name} {category_name.lower()} setting made of {metal_desc}. The {category_name.lower()} must be WORN on the {placement} of the person in Image 3 — the band wraps around the finger with the gem sitting on top, just like a real person wearing a ring. Do NOT place the jewelry floating in the air or detached from the body.
-
-SIZE — MATCH IMAGE 2 EXACTLY:
+The third image shows this same gemstone on a real human hand for scale. Use it only as a size reference:
 {size_anchor}
 
-SETTING DESIGN:
-{style_desc}
+The {style_name} setting: {style_desc}. The jewelry must be worn naturally — {_wear_instruction(category_name)}.
 
-PHOTOGRAPHIC QUALITY:
-Render this as a professional jewelry advertisement photograph. The person's skin texture, skin tone, pose, and the entire background must remain exactly as they appear in Image 3. Match the lighting direction and color temperature from Image 3. The {metal_name.lower()} setting should have realistic reflections and cast a subtle shadow where it contacts the skin. The gemstone must faithfully reproduce the exact color, cut shape, facet pattern, and brilliance visible in Image 1. Output only the final photograph with no text or labels."""
+The {metal_name.lower()} setting should have realistic reflections and cast a subtle shadow where it contacts the skin. Match the lighting direction and color temperature from the first image. Output only the final photograph with no text or labels."""
 
 
 # ---------------------------------------------------------------------------
@@ -185,6 +197,7 @@ async def generate_preview(
     style_id: str = Form(...),
     model_photo_id: Optional[str] = Form(None),
     customer_photo: Optional[UploadFile] = File(None),
+    finger: Optional[str] = Form(None),
 ):
     try:
         if not supabase:
@@ -222,22 +235,13 @@ async def generate_preview(
         style_name = sty_res.data["name"] if sty_res.data else "Solitaire"
 
         # ---------------------------------------------------------------
-        # PASS 1: Analyze gem characteristics (TEXT only, fast)
+        # Generate jewelry preview (multi-image composition)
         # ---------------------------------------------------------------
-        print(f"[Generate] Pass 1: Analyzing gem characteristics...")
-        gem_analysis = await analyze_gem(gem_image_bytes, context_image_bytes)
-        gem_description = _format_gem_description(gem_analysis)
-        pass1_time = time.time() - start_time
-        print(f"[Generate] Pass 1 done in {pass1_time:.1f}s")
-
-        # ---------------------------------------------------------------
-        # PASS 2: Generate jewelry preview (multi-image composition)
-        # ---------------------------------------------------------------
-        print(f"[Generate] Pass 2: Generating jewelry preview...")
+        print(f"[Generate] Building prompt and generating preview...")
         prompt_text = build_prompt(
             category_name, metal_name, style_name,
             gem_data=gem_data,
-            gem_description=gem_description,
+            finger=finger,
         )
 
         result_bytes = await generate_gem_preview(
@@ -245,10 +249,11 @@ async def generate_preview(
             gem_context_image_bytes=context_image_bytes,
             target_photo_bytes=target_photo_bytes,
             prompt=prompt_text,
+            gem_to_finger_ratio=gem_data.get("gem_to_finger_ratio"),
         )
 
         processing_time = (time.time() - start_time) * 1000
-        print(f"[Generate] Both passes done in {processing_time:.0f}ms")
+        print(f"[Generate] Done in {processing_time:.0f}ms")
 
         # 5. Upload result
         result_url = await upload_bytes_to_supabase(result_bytes, "results")

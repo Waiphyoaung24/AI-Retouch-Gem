@@ -142,38 +142,94 @@ Respond in this exact JSON format only:
 # Pass 2: Generate jewelry preview (multi-image composition)
 # ---------------------------------------------------------------------------
 
+def _prescale_gem_image(
+    gem_img: Image.Image,
+    target_img: Image.Image,
+    target_photo_bytes: bytes,
+    gem_to_finger_ratio: float | None,
+) -> Image.Image:
+    """Resize the gem product image so it visually matches the desired proportion.
+
+    Gemini ignores text-based size instructions but respects the visual size
+    of elements in input images.  We shrink the gem and center it on a canvas
+    matching the target image dimensions so Gemini "sees" the correct scale.
+    """
+    from .hand_analysis import analyze_hand, _estimate_finger_width_px
+
+    if gem_to_finger_ratio is None:
+        return gem_img  # no ratio data — send original
+
+    # Detect finger width on the target hand photo
+    analysis = analyze_hand(target_photo_bytes)
+    if not analysis:
+        print("[PreScale] No hand in target photo, skipping pre-scale")
+        return gem_img
+
+    finger_width_px = _estimate_finger_width_px(analysis, "ring")
+    if finger_width_px <= 0:
+        return gem_img
+
+    # Target gem width in pixels on the target image
+    target_gem_px = finger_width_px * (gem_to_finger_ratio / 100.0)
+    target_gem_px = max(10, int(target_gem_px))
+
+    # Resize gem preserving aspect ratio
+    gw, gh = gem_img.size
+    gem_aspect = gw / gh if gh > 0 else 1.0
+    new_w = target_gem_px
+    new_h = max(1, int(new_w / gem_aspect))
+    gem_resized = gem_img.resize((new_w, new_h), Image.LANCZOS)
+
+    # Place centered on a canvas matching target image dimensions
+    tw, th = target_img.size
+    canvas = Image.new("RGB", (tw, th), (255, 255, 255))
+    paste_x = (tw - new_w) // 2
+    paste_y = (th - new_h) // 2
+    canvas.paste(gem_resized, (paste_x, paste_y))
+
+    print(f"[PreScale] Gem {gw}x{gh} → {new_w}x{new_h} on {tw}x{th} canvas "
+          f"(finger={finger_width_px:.0f}px, ratio={gem_to_finger_ratio}%)")
+    return canvas
+
+
 async def generate_gem_preview(
     gem_product_image_bytes: bytes,
     gem_context_image_bytes: bytes,
     target_photo_bytes: bytes,
     prompt: str,
+    gem_to_finger_ratio: float | None = None,
 ) -> bytes:
-    """Pass 2: Generate jewelry preview using multi-image composition.
+    """Generate jewelry preview using Gemini's Detail Preservation pattern.
 
-    Sends 3 reference images following Gemini's multi-image pattern:
-    - Image 1: Gem product photo (color/cut/brilliance reference)
-    - Image 2: Gem context photo on a hand (SIZE reference)
-    - Image 3: Customer/model body photo (base photo to edit)
+    Image order follows Gemini docs (base image first, element second, prompt last):
+    - Image 1 (first):  Target/base photo to edit (hand/ear/neck)
+    - Image 2 (second): Gem product photo (pre-scaled to correct proportion)
+    - Image 3 (third):  Gem context photo on hand (size reference only)
+    - Text (last):      Composition prompt
     """
     try:
+        target_img = Image.open(io.BytesIO(target_photo_bytes))
         gem_img = Image.open(io.BytesIO(gem_product_image_bytes))
         context_img = Image.open(io.BytesIO(gem_context_image_bytes))
-        target_img = Image.open(io.BytesIO(target_photo_bytes))
         aspect_ratio = detect_aspect_ratio(target_img)
 
+        # Pre-scale the gem image so Gemini sees the correct visual proportion
+        gem_img = _prescale_gem_image(
+            gem_img, target_img, target_photo_bytes, gem_to_finger_ratio,
+        )
+
         tw, th = target_img.size
-        print(f"[Pass2] gemini-3-pro-image-preview: 3 images (gem+context+target {tw}x{th}), "
+        gw, gh = gem_img.size
+        print(f"[Generate] gemini-3.1-flash-image-preview: 3 images (target {tw}x{th}, gem {gw}x{gh}, context), "
               f"aspect_ratio={aspect_ratio}, image_size=2K")
 
-        # 3-image composition: [prompt, gem_product, gem_on_hand, target_photo]
-        # gemini-3.1-flash-image-preview (Nano Banana 2):
-        #   - Supports up to 3 input images
-        #   - 2K resolution output for fine jewelry detail
-        #   - Improved image quality and consistency
+        # Gemini Detail Preservation pattern:
+        # [base_image, element_image, ref_image, text_prompt]
+        # Base image first so Gemini treats it as the image to edit/preserve.
         def _call():
             return client.models.generate_content(
-                model="gemini-3-pro-image-preview",
-                contents=[prompt, gem_img, context_img, target_img],
+                model="gemini-3.1-flash-image-preview",
+                contents=[target_img, gem_img, context_img, prompt],
                 config=types.GenerateContentConfig(
                     response_modalities=["TEXT", "IMAGE"],
                     image_config=types.ImageConfig(

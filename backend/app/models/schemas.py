@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import List, Optional
 
 
 # --- Gems ---
@@ -21,6 +21,7 @@ class Gem(BaseModel):
     length_mm: Optional[float] = None
     width_mm: Optional[float] = None
     depth_mm: Optional[float] = None
+    gem_to_finger_ratio: Optional[float] = None
     created_at: str
 
 

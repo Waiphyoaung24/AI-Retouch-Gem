@@ -2,6 +2,7 @@ from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends
 from typing import List, Optional
 from ..models.schemas import Gem
 from ..api.utils import upload_to_supabase_storage, supabase
+from ..services.hand_analysis import measure_gem_to_finger_ratio
 from ..config import verify_admin
 import uuid
 import datetime
@@ -46,8 +47,16 @@ async def create_gem(
     _ = Depends(verify_admin),
 ):
     try:
+        # Read context image bytes before upload (needed for Gemini ratio analysis)
+        context_bytes = await context_image.read()
+        await context_image.seek(0)
+
         product_image_url = await upload_to_supabase_storage(product_image, "gems")
         context_image_url = await upload_to_supabase_storage(context_image, "gems")
+
+        # Measure gem-to-finger ratio from context photo via MediaPipe + Gemini bbox
+        gem_to_finger_ratio = await measure_gem_to_finger_ratio(context_bytes)
+
         new_id = str(uuid.uuid4())
         now = datetime.datetime.now().isoformat()
         data = {
@@ -60,6 +69,7 @@ async def create_gem(
             "length_mm": length_mm,
             "width_mm": width_mm,
             "depth_mm": depth_mm,
+            "gem_to_finger_ratio": gem_to_finger_ratio,
             "created_at": now,
         }
         supabase.table("gems").insert(data).execute()
