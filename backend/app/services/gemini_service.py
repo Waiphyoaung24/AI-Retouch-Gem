@@ -203,37 +203,46 @@ async def generate_gem_preview(
     prompt: str,
     gem_to_finger_ratio: float | None = None,
 ) -> bytes:
-    """Generate jewelry preview using Gemini's Detail Preservation pattern.
+    """Generate jewelry preview using a 4-image pipeline for fidelity + sizing.
 
-    Image order follows Gemini docs (base image first, element second, prompt last):
-    - Image 1 (first):  Target/base photo to edit (hand/ear/neck)
-    - Image 2 (second): Gem product photo (pre-scaled to correct proportion)
-    - Image 3 (third):  Gem context photo on hand (size reference only)
-    - Text (last):      Composition prompt
+    Image order:
+    - Image 1: Target hand photo (base to edit/preserve)
+    - Image 2: Full-resolution gem product photo (visual fidelity source)
+    - Image 3: Pre-scaled gem on canvas (size reference for Gemini)
+    - Image 4: Context photo — gem on real hand (backup scale confirmation)
+    - Text (last): Composition prompt
     """
     try:
         target_img = Image.open(io.BytesIO(target_photo_bytes))
-        gem_img = Image.open(io.BytesIO(gem_product_image_bytes))
+        gem_fullres = Image.open(io.BytesIO(gem_product_image_bytes))
         context_img = Image.open(io.BytesIO(gem_context_image_bytes))
         aspect_ratio = detect_aspect_ratio(target_img)
 
-        # Pre-scale the gem image so Gemini sees the correct visual proportion
-        gem_img = _prescale_gem_image(
-            gem_img, target_img, target_photo_bytes, gem_to_finger_ratio,
+        # Build the pre-scaled size reference (tiny gem on large canvas)
+        gem_size_ref = _prescale_gem_image(
+            gem_fullres, target_img, target_photo_bytes, gem_to_finger_ratio,
         )
 
         tw, th = target_img.size
-        gw, gh = gem_img.size
-        print(f"[Generate] gemini-3.1-flash-image-preview: 3 images (target {tw}x{th}, gem {gw}x{gh}, context), "
+        fw, fh = gem_fullres.size
+        sw, sh = gem_size_ref.size
+        has_size_ref = gem_to_finger_ratio is not None
+        n_images = 4 if has_size_ref else 3
+        print(f"[Generate] gemini-3.1-flash-image-preview: {n_images} images "
+              f"(target {tw}x{th}, gem-full {fw}x{fh}"
+              f"{f', gem-sized {sw}x{sh}' if has_size_ref else ''}, context), "
               f"aspect_ratio={aspect_ratio}, image_size=2K")
 
-        # Gemini Detail Preservation pattern:
-        # [base_image, element_image, ref_image, text_prompt]
-        # Base image first so Gemini treats it as the image to edit/preserve.
+        # Build contents list: separate fidelity image from size image
+        if has_size_ref:
+            contents = [target_img, gem_fullres, gem_size_ref, context_img, prompt]
+        else:
+            contents = [target_img, gem_fullres, context_img, prompt]
+
         def _call():
             return client.models.generate_content(
                 model="gemini-3.1-flash-image-preview",
-                contents=[target_img, gem_img, context_img, prompt],
+                contents=contents,
                 config=types.GenerateContentConfig(
                     response_modalities=["TEXT", "IMAGE"],
                     image_config=types.ImageConfig(

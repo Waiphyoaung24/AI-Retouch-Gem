@@ -59,20 +59,22 @@ def _build_size_anchor(
     dim_text: str,
     gem_to_finger_ratio: float | None = None,
 ) -> str:
-    """Generate a concrete size description using gem-to-finger ratio.
+    """Generate size instructions referencing the correct images.
 
-    If ``gem_to_finger_ratio`` is available (measured by Gemini Vision at upload
-    time), we use it directly.  Otherwise we fall back to computing from mm
-    dimensions with a 16mm average finger width.
+    When gem_to_finger_ratio is available (4-image mode):
+      Image 3 = pre-scaled gem on canvas (size reference)
+      Image 4 = context photo (gem on real hand, backup confirmation)
+    When missing (3-image mode):
+      Image 3 = context photo (gem on real hand)
     """
     AVG_FINGER_WIDTH_MM = 16.0
+    has_ratio = gem_to_finger_ratio is not None
 
     # --- Determine percentage ---
-    if gem_to_finger_ratio is not None:
+    if has_ratio:
         pct = round(gem_to_finger_ratio)
         ratio_desc = (
-            f"The gem should appear approximately {pct}% of the finger's width "
-            f"(measured from the context photo) — "
+            f"The gem should appear approximately {pct}% of the finger's width — "
         )
     else:
         gem_w = float(width_mm) if width_mm else float(length_mm) if length_mm else None
@@ -94,12 +96,19 @@ def _build_size_anchor(
         else:
             ratio_desc += "it is a large stone, approaching the finger width."
 
-    # Always reference the third image (context photo) for visual confirmation
-    visual_ref = (
-        f"Look at the third image — it shows this exact gem on a real hand. "
-        f"The gem in your output MUST appear at the same proportion relative to the finger "
-        f"as it does in the third image. Do not make it bigger."
-    )
+    # Visual size references differ based on 4-image vs 3-image mode
+    if has_ratio:
+        visual_ref = (
+            f"The third image shows how large the gem should appear relative to the hand — "
+            f"match that exact size. The fourth image confirms this proportion on a real hand. "
+            f"Do not make the gem bigger than shown."
+        )
+    else:
+        visual_ref = (
+            f"The third image shows this exact gem on a real hand. "
+            f"The gem in your output MUST appear at the same proportion relative to the finger "
+            f"as it does in the third image. Do not make it bigger."
+        )
 
     if category_name == "Ring":
         return f"{ratio_desc} {visual_ref}"
@@ -133,12 +142,14 @@ def build_prompt(
     gem_data: dict = None,
     finger: Optional[str] = None,
 ) -> str:
-    """Build prompt following Gemini's Detail Preservation pattern.
+    """Build prompt for the 4-image (or 3-image fallback) pipeline.
 
-    Image order (set in gemini_service.py):
-    - First image:  target photo (base to edit)
-    - Second image: gem product photo (element to transfer)
-    - Third image:  gem on hand (size reference)
+    4-image mode (when gem_to_finger_ratio exists):
+      Image 1: target hand  |  Image 2: full-res gem (fidelity)
+      Image 3: pre-scaled gem (size)  |  Image 4: context photo (confirmation)
+
+    3-image fallback (no ratio):
+      Image 1: target hand  |  Image 2: full-res gem  |  Image 3: context photo
     """
     gem_data = gem_data or {}
     body_part = "hand" if category_name == "Ring" else "ear" if category_name == "Earring" else "neck"
@@ -166,11 +177,11 @@ def build_prompt(
         gem_to_finger_ratio=gem_data.get("gem_to_finger_ratio"),
     )
 
-    return f"""Take the first image of a person's {body_part}. Place the exact gemstone from the second image onto the {placement} in a {style_name} {category_name.lower()} setting made of {metal_desc}. Ensure that the person's {body_part}, skin texture, skin tone, pose, and background in the first image remain completely unchanged.
+    return f"""Take the first image of a person's {body_part}. Place a gemstone onto the {placement} in a {style_name} {category_name.lower()} setting made of {metal_desc}. Ensure that the person's {body_part}, skin texture, skin tone, pose, and background in the first image remain completely unchanged.
 
-The gemstone from the second image must be transferred exactly as it appears — same color, same shape, same cut, same facet pattern, same brilliance. Do not reimagine or recreate the gem. It must be visually identical to the second image.
+CRITICAL — GEM VISUAL FIDELITY: The second image is a high-resolution close-up of the exact gemstone. You MUST reproduce this gem with pixel-perfect fidelity — identical color, identical shape, identical cut, identical facet pattern, identical brilliance, identical inclusions. Do not reimagine, simplify, or recreate the gem. Every visual detail from the second image must be preserved exactly.
 
-The third image shows this same gemstone on a real human hand for scale. Use it only as a size reference:
+SIZE — MATCH THE REFERENCE:
 {size_anchor}
 
 The {style_name} setting: {style_desc}. The jewelry must be worn naturally — {_wear_instruction(category_name)}.
