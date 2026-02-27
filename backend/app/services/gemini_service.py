@@ -154,10 +154,14 @@ def _prescale_gem_image(
     of elements in input images.  We shrink the gem and center it on a canvas
     matching the target image dimensions so Gemini "sees" the correct scale.
     """
-    from .hand_analysis import analyze_hand, _estimate_finger_width_px
-
     if gem_to_finger_ratio is None:
         return gem_img  # no ratio data — send original
+
+    try:
+        from .hand_analysis import analyze_hand, _estimate_finger_width_px
+    except ImportError:
+        print("[PreScale] hand_analysis unavailable, skipping pre-scale")
+        return gem_img
 
     # Detect finger width on the target hand photo
     analysis = analyze_hand(target_photo_bytes)

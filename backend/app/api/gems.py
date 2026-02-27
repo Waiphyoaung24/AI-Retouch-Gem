@@ -2,7 +2,6 @@ from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends
 from typing import List, Optional
 from ..models.schemas import Gem
 from ..api.utils import upload_to_supabase_storage, supabase
-from ..services.hand_analysis import measure_gem_to_finger_ratio
 from ..config import verify_admin
 import uuid
 import datetime
@@ -55,7 +54,12 @@ async def create_gem(
         context_image_url = await upload_to_supabase_storage(context_image, "gems")
 
         # Measure gem-to-finger ratio from context photo via MediaPipe + Gemini bbox
-        gem_to_finger_ratio = await measure_gem_to_finger_ratio(context_bytes)
+        try:
+            from ..services.hand_analysis import measure_gem_to_finger_ratio
+            gem_to_finger_ratio = await measure_gem_to_finger_ratio(context_bytes)
+        except ImportError:
+            print("[Gems] hand_analysis unavailable (mediapipe not installed), skipping ratio measurement")
+            gem_to_finger_ratio = None
 
         new_id = str(uuid.uuid4())
         now = datetime.datetime.now().isoformat()
